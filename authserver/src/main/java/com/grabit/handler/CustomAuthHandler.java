@@ -22,7 +22,7 @@ import java.util.Map;
 
 @Component
 @Log4j2
-public class CustomAuthHandler implements AuthenticationFailureHandler {
+public class CustomAuthHandler implements AuthenticationFailureHandler, AuthenticationEntryPoint {
 
     @Override
     public void onAuthenticationFailure(HttpServletRequest request, HttpServletResponse response, AuthenticationException exception) throws IOException, ServletException {
@@ -51,5 +51,10 @@ public class CustomAuthHandler implements AuthenticationFailureHandler {
             apiError=new APIError("authentication_error", exception.getMessage());
         response.setStatus(httpStatus);
         new ObjectMapper().writeValue(response.getWriter(),apiError);
+    }
+
+    @Override
+    public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
+        log.error(authException);
     }
 }

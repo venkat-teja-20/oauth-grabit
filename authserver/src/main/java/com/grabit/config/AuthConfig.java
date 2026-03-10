@@ -8,6 +8,7 @@ import com.nimbusds.jose.proc.SecurityContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
@@ -19,8 +20,12 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.authorization.client.InMemoryRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
+import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -49,7 +54,19 @@ public class AuthConfig {
                 )
         );
 
+        http.exceptionHandling(e -> e
+                .defaultAuthenticationEntryPointFor(
+                        new LoginUrlAuthenticationEntryPoint("/login"),
+                        new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
+                )
+        );
+
         return http.build();
+    }
+
+    @Bean
+    public AuthorizationServerSettings authorizationServerSettings() {
+        return AuthorizationServerSettings.builder().build();
     }
 
     @Bean
@@ -76,7 +93,23 @@ public class AuthConfig {
                         .tokenSettings(serviceTokenSettings())
                         .build();
 
-        return new InMemoryRegisteredClientRepository(orderServiceClient);
+        RegisteredClient mobileClient =
+                RegisteredClient.withId(UUID.randomUUID().toString())
+                        .clientId("mobile-client")
+                        .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                        .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
+                        .redirectUri("http://localhost:8081/callback")
+                        .scope("member")
+                        .clientSettings(
+                                ClientSettings.builder()
+                                        .requireProofKey(true)   // PKCE REQUIRED
+                                        .requireAuthorizationConsent(false)
+                                        .build()
+                        )
+                        .tokenSettings(mobileTokenSettings())
+                        .build();
+
+        return new InMemoryRegisteredClientRepository(orderServiceClient,mobileClient);
     }
 
     // RSA Key for JWT signing
@@ -115,6 +148,14 @@ public class AuthConfig {
         return TokenSettings
                 .builder()
                 .accessTokenTimeToLive(Duration.ofMinutes(15))
+                .build();
+    }
+
+    @Bean
+    public TokenSettings mobileTokenSettings(){
+        return TokenSettings
+                .builder()
+                .accessTokenTimeToLive(Duration.ofMinutes(10))
                 .build();
     }
 
