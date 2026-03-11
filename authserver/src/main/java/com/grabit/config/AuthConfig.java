@@ -54,7 +54,11 @@ public class AuthConfig {
                 )
         );
 
-        http.exceptionHandling(e -> e
+        http
+                .authorizeHttpRequests(auth -> auth
+                        .anyRequest().authenticated()
+                )
+                .exceptionHandling(e -> e
                 .defaultAuthenticationEntryPointFor(
                         new LoginUrlAuthenticationEntryPoint("/login"),
                         new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
@@ -66,7 +70,9 @@ public class AuthConfig {
 
     @Bean
     public AuthorizationServerSettings authorizationServerSettings() {
-        return AuthorizationServerSettings.builder().build();
+        return AuthorizationServerSettings.builder()
+                .issuer("http://localhost:4040")
+                .build();
     }
 
     @Bean
