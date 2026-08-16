@@ -1,5 +1,6 @@
 package com.grabit.config;
 
+import com.grabit.service.CustomUserDetailsService;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.JWKSource;
@@ -8,12 +9,18 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.token.*;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
@@ -74,16 +81,16 @@ public class AuthConfig {
         return http.build();
     }
 
-    @Bean
-    public UserDetailsService userDetailsService() {
-        return new InMemoryUserDetailsManager(
-                User.withDefaultPasswordEncoder()
-                        .username("user")
-                        .password("password")
-                        .roles("USER")
-                        .build()
-        );
-    }
+//    @Bean
+//    public UserDetailsService userDetailsService() {
+//        return new InMemoryUserDetailsManager(
+//                User.withDefaultPasswordEncoder()
+//                        .username("user")
+//                        .password("password")
+//                        .roles("USER")
+//                        .build()
+//        );
+//    }
 
 //    @Bean
 //    public JwtEncoder jwtEncoder(JWKSource<SecurityContext> jwkSource) {
@@ -104,41 +111,21 @@ public class AuthConfig {
     }
 
     @Bean
+    public PasswordEncoder passwordEncoder(){
+        DelegatingPasswordEncoder delegatingPasswordEncoder =
+                (DelegatingPasswordEncoder) PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        delegatingPasswordEncoder.setDefaultPasswordEncoderForMatches(new BCryptPasswordEncoder());
+        return delegatingPasswordEncoder;
+    }
+
+    @Bean
     public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource){
         return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
     }
 
     @Bean
-    public RegisteredClientRepository registeredClientRepository(){
-        RegisteredClient orderClient=RegisteredClient
-                .withId(UUID.randomUUID().toString())
-                .clientId("order-client")
-                .clientSecret("{noop}order-secret")
-                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
-                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
-                .scope("internal")
-                .tokenSettings(serviceTokenSettings())
-                .build();
-        RegisteredClient mobileClient=RegisteredClient
-                .withId(UUID.randomUUID().toString())
-                .clientId("mobile-client")
-//                .clientSecret("{noop}mobile-secret")
-                .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
-                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-                .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
-                .redirectUri("http://127.0.0.1:9090/callback")
-                .clientSettings(
-                        ClientSettings.builder()
-                                .requireProofKey(true)   // PKCE REQUIRED
-                                .requireAuthorizationConsent(false)
-                                .build()
-                )
-                .scope("member")
-                .scope("offline_access")
-                .tokenSettings(appTokenSettings())
-                .build();
-
-        return new InMemoryRegisteredClientRepository(orderClient,mobileClient);
+    public RegisteredClientRepository registeredClientRepository(JdbcTemplate jdbcTemplate){
+        return new JdbcRegisteredClientRepository(jdbcTemplate);
     }
 
     // RSA Key for JWT signing
@@ -163,24 +150,6 @@ public class AuthConfig {
             throw new IllegalStateException(ex);
         }
         return keyPair;
-    }
-
-    @Bean
-    public TokenSettings appTokenSettings(){
-        return TokenSettings
-                .builder()
-                .accessTokenTimeToLive(Duration.ofMinutes(10))
-                .refreshTokenTimeToLive(Duration.ofDays(30))
-                .reuseRefreshTokens(false)
-                .build();
-    }
-
-    @Bean
-    public TokenSettings serviceTokenSettings(){
-        return TokenSettings
-                .builder()
-                .accessTokenTimeToLive(Duration.ofMinutes(5))
-                .build();
     }
 
 
