@@ -7,12 +7,17 @@ import com.nimbusds.jose.proc.SecurityContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.server.authorization.token.*;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
-import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.authorization.client.InMemoryRegisteredClientRepository;
@@ -20,11 +25,9 @@ import org.springframework.security.oauth2.server.authorization.client.Registere
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
-import org.springframework.security.oauth2.server.authorization.token.DelegatingOAuth2TokenGenerator;
-import org.springframework.security.oauth2.server.authorization.token.JwtGenerator;
-import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenGenerator;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -38,7 +41,7 @@ public class AuthConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http, OAuth2TokenGenerator<?> tokenGenerator) throws Exception {
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http,OAuth2TokenGenerator<?> tokenGenerator,RegisteredClientRepository registeredClientRepository) throws Exception {
 
         // 1. Instantiate the configurer directly
         OAuth2AuthorizationServerConfigurer authorizationServerConfigurer =
@@ -49,22 +52,50 @@ public class AuthConfig {
                 .securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
                 // 3. Apply the authorization server defaults
                 .with(authorizationServerConfigurer, customizer -> customizer
-                        .tokenGenerator(tokenGenerator))
+                                .tokenGenerator(tokenGenerator)
+                                /* PublicClientRefreshTokenAuthenticationConverter and PublicClientRefreshProvider needed
+                                to allow the generation of access token from refresh token for a public client
+                                 */
+                                .clientAuthentication(authentication->authentication
+                                        .authenticationConverter(new PublicClientRefreshTokenAuthenticationConverter())
+                                        .authenticationProvider(new PublicClientRefreshProvider(registeredClientRepository)))
+                )
                 .authorizeHttpRequests(authorize -> authorize
                         .anyRequest().authenticated()
                 )
                 // 4. Redirect to login page for unauthorized requests
                 .exceptionHandling(ex -> ex
-                        .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/login"))
+                                .defaultAuthenticationEntryPointFor(
+                                        new LoginUrlAuthenticationEntryPoint("/login"),
+                                        new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
+                                )
                 );
 
         return http.build();
     }
 
     @Bean
+    public UserDetailsService userDetailsService() {
+        return new InMemoryUserDetailsManager(
+                User.withDefaultPasswordEncoder()
+                        .username("user")
+                        .password("password")
+                        .roles("USER")
+                        .build()
+        );
+    }
+
+//    @Bean
+//    public JwtEncoder jwtEncoder(JWKSource<SecurityContext> jwkSource) {
+//        return new NimbusJwtEncoder(jwkSource);
+//    }
+
+
+    @Bean
     public OAuth2TokenGenerator<?> tokenGenerator(JWKSource<SecurityContext> jwkSource) {
         JwtGenerator jwtGenerator = new JwtGenerator(new NimbusJwtEncoder(jwkSource));
-        OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenGenerator = new CustomOAuth2RefreshTokenGenerator();
+        OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenGenerator= new CustomOAuth2RefreshTokenGenerator();
+//        OAuth2RefreshTokenGenerator refreshTokenGenerator = new OAuth2RefreshTokenGenerator();
 
         return new DelegatingOAuth2TokenGenerator(
                 jwtGenerator,
@@ -77,55 +108,47 @@ public class AuthConfig {
         return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
     }
 
-//     Register Clients
     @Bean
-    public RegisteredClientRepository registeredClientRepository() {
+    public RegisteredClientRepository registeredClientRepository(){
+        RegisteredClient orderClient=RegisteredClient
+                .withId(UUID.randomUUID().toString())
+                .clientId("order-client")
+                .clientSecret("{noop}order-secret")
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
+                .scope("internal")
+                .tokenSettings(serviceTokenSettings())
+                .build();
+        RegisteredClient mobileClient=RegisteredClient
+                .withId(UUID.randomUUID().toString())
+                .clientId("mobile-client")
+//                .clientSecret("{noop}mobile-secret")
+                .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
+                .redirectUri("http://127.0.0.1:9090/callback")
+                .clientSettings(
+                        ClientSettings.builder()
+                                .requireProofKey(true)   // PKCE REQUIRED
+                                .requireAuthorizationConsent(false)
+                                .build()
+                )
+                .scope("member")
+                .scope("offline_access")
+                .tokenSettings(appTokenSettings())
+                .build();
 
-        RegisteredClient orderServiceClient =
-                RegisteredClient.withId(UUID.randomUUID().toString())
-                        .clientId("order-service")
-                        .clientSecret("{noop}order-secret")
-                        .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
-                        .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
-                        .scope("internal")
-                        .tokenSettings(serviceTokenSettings())
-                        .build();
-
-        RegisteredClient mobileClient =
-                RegisteredClient.withId(UUID.randomUUID().toString())
-                        .clientId("mobile-client")
-                        .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-                        .clientAuthenticationMethod(ClientAuthenticationMethod.NONE)
-                        .redirectUri("http://localhost:8081/callback")
-                        .scope("member")
-                        .scope("offline_access")
-                        .clientSettings(
-                                ClientSettings.builder()
-                                        .requireProofKey(true)   // PKCE REQUIRED
-                                        .requireAuthorizationConsent(false)
-                                        .build()
-                        )
-                        .tokenSettings(mobileTokenSettings())
-                        .build();
-
-        return new InMemoryRegisteredClientRepository(orderServiceClient,mobileClient);
+        return new InMemoryRegisteredClientRepository(orderClient,mobileClient);
     }
 
     // RSA Key for JWT signing
     @Bean
     public JWKSource<SecurityContext> jwkSource() {
-        // 1. Generate or load your RSA Key Pair
         KeyPair keyPair = generateRsaKey();
-        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
-        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-
-        // 2. Create a JWK object (the standard format for OAuth keys)
-        RSAKey rsaKey = new RSAKey.Builder(publicKey)
-                .privateKey(privateKey)
+        RSAKey rsaKey = new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
+                .privateKey((RSAPrivateKey) keyPair.getPrivate())
                 .keyID(UUID.randomUUID().toString())
                 .build();
-
-        // 3. Put it in a Set and return it
         JWKSet jwkSet = new JWKSet(rsaKey);
         return (selector, context) -> selector.select(jwkSet);
     }
@@ -143,15 +166,7 @@ public class AuthConfig {
     }
 
     @Bean
-    public TokenSettings serviceTokenSettings(){
-        return TokenSettings
-                .builder()
-                .accessTokenTimeToLive(Duration.ofMinutes(15))
-                .build();
-    }
-
-    @Bean
-    public TokenSettings mobileTokenSettings(){
+    public TokenSettings appTokenSettings(){
         return TokenSettings
                 .builder()
                 .accessTokenTimeToLive(Duration.ofMinutes(10))
@@ -159,5 +174,14 @@ public class AuthConfig {
                 .reuseRefreshTokens(false)
                 .build();
     }
+
+    @Bean
+    public TokenSettings serviceTokenSettings(){
+        return TokenSettings
+                .builder()
+                .accessTokenTimeToLive(Duration.ofMinutes(5))
+                .build();
+    }
+
 
 }
