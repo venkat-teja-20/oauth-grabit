@@ -3,6 +3,7 @@ package com.grabit.config;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -15,8 +16,16 @@ import java.util.Map;
 @Log4j2
 public class APIExceptionHandler {
 
+    @ExceptionHandler(value = IllegalArgumentException.class)
+    public ResponseEntity<?> handleIllegalArgumentException(IllegalArgumentException e){
+        log.error(e);
+        return ResponseEntity
+                .status(400)
+                .body(Map.of("message",e.getMessage()));
+    }
+
     @ExceptionHandler(value = Exception.class)
-    public ResponseEntity handleException(HttpServletRequest request,Exception e){
+    public ResponseEntity<?> handleException(HttpServletRequest request,Exception e){
         log.error(e);
         return ResponseEntity
                 .status(500)
