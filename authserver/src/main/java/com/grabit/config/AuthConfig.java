@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
@@ -20,6 +21,7 @@ import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.token.*;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
@@ -48,7 +50,7 @@ public class AuthConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http,OAuth2TokenGenerator<?> tokenGenerator,RegisteredClientRepository registeredClientRepository) throws Exception {
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http, OAuth2TokenGenerator<?> tokenGenerator, RegisteredClientRepository registeredClientRepository, OAuth2AuthorizationService oAuth2AuthorizationService) throws Exception {
 
         // 1. Instantiate the configurer directly
         OAuth2AuthorizationServerConfigurer authorizationServerConfigurer =
@@ -63,6 +65,7 @@ public class AuthConfig {
                                 /* PublicClientRefreshTokenAuthenticationConverter and PublicClientRefreshProvider needed
                                 to allow the generation of access token from refresh token for a public client
                                  */
+                                .authorizationService(oAuth2AuthorizationService)
                                 .clientAuthentication(authentication->authentication
                                         .authenticationConverter(new PublicClientRefreshTokenAuthenticationConverter())
                                         .authenticationProvider(new PublicClientRefreshProvider(registeredClientRepository)))
