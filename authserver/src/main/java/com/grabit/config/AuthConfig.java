@@ -1,6 +1,6 @@
 package com.grabit.config;
 
-import com.grabit.handler.CustomAuthHandler;
+import com.grabit.service.CustomUserDetailsService;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.JWKSource;
@@ -8,19 +8,33 @@ import com.nimbusds.jose.proc.SecurityContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
-import org.springframework.security.config.Customizer;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
+import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.OAuth2RefreshToken;
+import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.token.*;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.authorization.client.InMemoryRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
 import org.springframework.security.oauth2.server.authorization.settings.TokenSettings;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -34,27 +48,74 @@ public class AuthConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authServerSecurityFilterChain(HttpSecurity http, CustomAuthHandler customAuthHandler) throws Exception {
-        http.securityMatcher(
-                "/oauth2/**",
-                "/.well-known/**",
-                "/connect/**"
-        );
-        http.oauth2AuthorizationServer(authServer->authServer
-                .clientAuthentication(clientAuth->clientAuth
-                        .errorResponseHandler(customAuthHandler)
+    public SecurityFilterChain authorizationServerSecurityFilterChain(HttpSecurity http,OAuth2TokenGenerator<?> tokenGenerator,RegisteredClientRepository registeredClientRepository) throws Exception {
+
+        // 1. Instantiate the configurer directly
+        OAuth2AuthorizationServerConfigurer authorizationServerConfigurer =
+                new OAuth2AuthorizationServerConfigurer();
+
+        http
+                // 2. ONLY trigger this filter chain for Auth Server endpoints
+                .securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
+                // 3. Apply the authorization server defaults
+                .with(authorizationServerConfigurer, customizer -> customizer
+                                .tokenGenerator(tokenGenerator)
+                                /* PublicClientRefreshTokenAuthenticationConverter and PublicClientRefreshProvider needed
+                                to allow the generation of access token from refresh token for a public client
+                                 */
+                                .clientAuthentication(authentication->authentication
+                                        .authenticationConverter(new PublicClientRefreshTokenAuthenticationConverter())
+                                        .authenticationProvider(new PublicClientRefreshProvider(registeredClientRepository)))
                 )
-                .tokenEndpoint(tokenEndpoint->tokenEndpoint
-                        .errorResponseHandler(customAuthHandler)
+                .authorizeHttpRequests(authorize -> authorize
+                        .anyRequest().authenticated()
                 )
-        );
+                // 4. Redirect to login page for unauthorized requests
+                .exceptionHandling(ex -> ex
+                                .defaultAuthenticationEntryPointFor(
+                                        new LoginUrlAuthenticationEntryPoint("/login"),
+                                        new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
+                                )
+                );
 
         return http.build();
     }
 
+//    @Bean
+//    public UserDetailsService userDetailsService() {
+//        return new InMemoryUserDetailsManager(
+//                User.withDefaultPasswordEncoder()
+//                        .username("user")
+//                        .password("password")
+//                        .roles("USER")
+//                        .build()
+//        );
+//    }
+
+//    @Bean
+//    public JwtEncoder jwtEncoder(JWKSource<SecurityContext> jwkSource) {
+//        return new NimbusJwtEncoder(jwkSource);
+//    }
+
+
     @Bean
-    public JwtEncoder jwtEncoder(JWKSource<SecurityContext> jwkSource) {
-        return new NimbusJwtEncoder(jwkSource);
+    public OAuth2TokenGenerator<?> tokenGenerator(JWKSource<SecurityContext> jwkSource) {
+        JwtGenerator jwtGenerator = new JwtGenerator(new NimbusJwtEncoder(jwkSource));
+        OAuth2TokenGenerator<OAuth2RefreshToken> refreshTokenGenerator= new CustomOAuth2RefreshTokenGenerator();
+//        OAuth2RefreshTokenGenerator refreshTokenGenerator = new OAuth2RefreshTokenGenerator();
+
+        return new DelegatingOAuth2TokenGenerator(
+                jwtGenerator,
+                refreshTokenGenerator
+        );
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder(){
+        DelegatingPasswordEncoder delegatingPasswordEncoder =
+                (DelegatingPasswordEncoder) PasswordEncoderFactories.createDelegatingPasswordEncoder();
+        delegatingPasswordEncoder.setDefaultPasswordEncoderForMatches(new BCryptPasswordEncoder());
+        return delegatingPasswordEncoder;
     }
 
     @Bean
@@ -62,38 +123,19 @@ public class AuthConfig {
         return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
     }
 
-//     Register Clients
     @Bean
-    public RegisteredClientRepository registeredClientRepository() {
-
-        RegisteredClient orderServiceClient =
-                RegisteredClient.withId(UUID.randomUUID().toString())
-                        .clientId("order-service")
-                        .clientSecret("{noop}order-secret")
-                        .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
-                        .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
-                        .scope("internal")
-                        .tokenSettings(serviceTokenSettings())
-                        .build();
-
-        return new InMemoryRegisteredClientRepository(orderServiceClient);
+    public RegisteredClientRepository registeredClientRepository(JdbcTemplate jdbcTemplate){
+        return new JdbcRegisteredClientRepository(jdbcTemplate);
     }
 
     // RSA Key for JWT signing
     @Bean
     public JWKSource<SecurityContext> jwkSource() {
-        // 1. Generate or load your RSA Key Pair
         KeyPair keyPair = generateRsaKey();
-        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
-        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-
-        // 2. Create a JWK object (the standard format for OAuth keys)
-        RSAKey rsaKey = new RSAKey.Builder(publicKey)
-                .privateKey(privateKey)
+        RSAKey rsaKey = new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
+                .privateKey((RSAPrivateKey) keyPair.getPrivate())
                 .keyID(UUID.randomUUID().toString())
                 .build();
-
-        // 3. Put it in a Set and return it
         JWKSet jwkSet = new JWKSet(rsaKey);
         return (selector, context) -> selector.select(jwkSet);
     }
@@ -110,12 +152,5 @@ public class AuthConfig {
         return keyPair;
     }
 
-    @Bean
-    public TokenSettings serviceTokenSettings(){
-        return TokenSettings
-                .builder()
-                .accessTokenTimeToLive(Duration.ofMinutes(15))
-                .build();
-    }
 
 }
